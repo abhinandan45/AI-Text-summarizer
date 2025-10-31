@@ -56,8 +56,7 @@ class SummarizerModel:
         while start < L:
             end = start + max_chars
             chunk = text[start:end]
-            # Extend to sentence boundary if possible (rudimentary)
-            # Avoid breaking in middle of words can be complex; keep simple
+            
             chunks.append(chunk.strip())
             start = end - overlap
             if start < 0:
@@ -77,7 +76,6 @@ class SummarizerModel:
         if not text or not text.strip():
             return ""
 
-        # Configure length params per summary_type
         if summary_type == "short":
             max_len, min_len = 60, 20
         elif summary_type == "medium":

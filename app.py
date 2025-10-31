@@ -1,80 +1,92 @@
-import streamlit as st
+from flask import Flask, render_template, request, jsonify
 from summarizer_model import SummarizerModel
-import fitz  # PyMuPDF for PDF reading
+import fitz  
+import os
+from werkzeug.utils import secure_filename
 
-# ✅ Page config must come immediately after imports
-st.set_page_config(page_title="AI Document Summarizer", page_icon="🤖", layout="centered")
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  
 
-# Load model (cached for performance)
-@st.cache_resource
-def load_model():
-    return SummarizerModel()
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-summarizer = load_model()
+print("🚀 Starting application...")
 
-# Function to extract text from PDF
-def extract_text_from_pdf(uploaded_file):
+try:
+    summarizer = SummarizerModel()
+    print("✅ Model loaded successfully!")
+except Exception as e:
+    print(f"❌ Failed to load model: {e}")
+    summarizer = None
+
+def extract_text_from_pdf(file_path):
     text = ""
-    with fitz.open(stream=uploaded_file.read(), filetype="pdf") as doc:
-        for page in doc:
-            text += page.get_text()
-    return text
+    try:
+        with fitz.open(file_path) as doc:
+            for page in doc:
+                text += page.get_text()
+        print(f"📄 Extracted {len(text)} characters from PDF")
+        return text
+    except Exception as e:
+        raise Exception(f"Error reading PDF: {str(e)}")
 
-# 🎨 Animated title and custom CSS
-st.markdown(
-    """
-    <style>
-        .title {
-            font-size: 40px;
-            font-weight: 700;
-            text-align: center;
-            color: #4CAF50;
-            animation: fadeIn 2s ease-in-out;
-        }
-        @keyframes fadeIn {
-            from {opacity: 0;}
-            to {opacity: 1;}
-        }
-        .footer {
-            text-align: center;
-            font-size: 14px;
-            color: gray;
-            margin-top: 20px;
-        }
-    </style>
-    <div class="title">📄 AI Document Summarizer</div>
-    """,
-    unsafe_allow_html=True
-)
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-st.write("Upload a PDF or paste your text below. Choose summary length and click **Summarize.**")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    uploaded_file = st.file_uploader("📂 Upload PDF", type=["pdf"])
-
-with col2:
-    summary_length = st.selectbox("🧩 Summary Length", ["short", "medium", "long"])
-
-text_input = st.text_area("📝 Or paste text here", height=200)
-
-if st.button("✨ Generate Summary"):
-    with st.spinner("Generating AI Summary... ⏳"):
+@app.route('/summarize', methods=['POST'])
+def summarize():
+    try:
+        if summarizer is None:
+            return jsonify({'error': 'Summarization model is not available. Please try again later.'}), 500
+        
         text = ""
-        if uploaded_file:
-            text = extract_text_from_pdf(uploaded_file)
-        elif text_input.strip():
-            text = text_input.strip()
-        else:
-            st.error("Please upload a PDF or enter some text.")
-            st.stop()
-
+        summary_length = request.form.get('summary_length', 'short')
+        
+        print(f"📨 Received request: summary_length={summary_length}")
+        
+        if 'pdf_file' in request.files:
+            file = request.files['pdf_file']
+            if file.filename != '':
+                print(f"📂 Processing PDF: {file.filename}")
+                filename = secure_filename(file.filename)
+                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                file.save(file_path)
+                text = extract_text_from_pdf(file_path)
+                os.remove(file_path)
+        
+        if not text and 'text_input' in request.form:
+            text = request.form['text_input'].strip()
+            print(f"📝 Processing text input: {len(text)} characters")
+        
+        if not text:
+            return jsonify({'error': 'Please upload a PDF or enter some text.'}), 400
+        
+        if len(text) < 10:
+            return jsonify({'error': 'Text is too short. Please provide more content.'}), 400
+        
+        print("🔄 Generating summary...")
         summary = summarizer.summarize(text, summary_length)
-        st.success("✅ Summary Generated Successfully!")
-        st.markdown("### Summary Output:")
-        st.write(summary)
+        print("✅ Summary generated successfully!")
+        
+        return jsonify({
+            'summary': summary,
+            'input_length': len(text),
+            'summary_type': summary_length
+        })
+        
+    except Exception as e:
+        print(f"❌ Error in summarize route: {str(e)}")
+        return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
-        st.info(f"📄 Input length: {len(text)} characters | 🧠 Type: {summary_length.capitalize()}")
+@app.route('/health')
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy' if summarizer else 'unhealthy',
+        'model_loaded': summarizer is not None
+    })
 
-st.markdown('<div class="footer">Developed by Abhinandan Rajput 💚</div>', unsafe_allow_html=True)
+if __name__ == '__main__':
+    print("🌐 Starting Flask server...")
+    app.run(debug=True, host='0.0.0.0', port=5000)
